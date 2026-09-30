@@ -1,0 +1,34 @@
+{
+  "case_id": "request-001",
+  "group_id": "request-family-a",
+  "revision_id": "questions-v1",
+  "request": {
+    "state": {
+      "message": "Please cancel the order that has not shipped yet.",
+      "order_status": "processing"
+    },
+    "questions": {
+      "asks_to_cancel": {
+        "type": "noul",
+        "instructions": {
+          "question": "Does `message` ask to cancel the order?",
+          "inspect": "message"
+        },
+        "criteria": {
+          "true": "The customer requests cancellation.",
+          "false": "The customer does not request cancellation."
+        }
+      },
+      "current_stage": {
+        "type": "choice",
+        "instructions": "Which supplied stage describes `order_status`?",
+        "criteria": {
+          "not_started": null,
+          "processing": null,
+          "shipped": null
+        }
+      }
+    },
+    "model": "jev-latest"
+  }
+}

@@ -1,0 +1,36 @@
+[project]
+name = "system-one-meta-builder"
+version = "0.6.0"
+description = "Host-LLM-led System One question design and experiment review"
+readme = "README.md"
+requires-python = ">=3.11"
+license = { file = "LICENSE" }
+authors = [{ name = "André Machon" }]
+dependencies = [
+  "typesafe-sdk==0.7.2",
+]
+
+[project.scripts]
+system-one-meta-builder = "system_one_meta_builder.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.8,<0.9"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+  "jsonschema>=4.25,<5",
+  "pytest>=8.4,<9",
+  "ruff>=0.13,<0.14",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

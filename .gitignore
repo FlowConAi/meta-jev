@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.venv/
+node_modules/
+build/
+dist/
+.env
+.env.*
+json_cache.json
+*.receipts.jsonl
+*.observations.jsonl
+research.local.json

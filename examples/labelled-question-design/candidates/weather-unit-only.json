@@ -1,0 +1,56 @@
+{
+  "case_id": "weather-unit-only",
+  "request": {
+    "model": "jev-latest",
+    "state": {
+      "request": {
+        "date": "2026-09-03",
+        "unit": "fahrenheit"
+      },
+      "weather_call": {
+        "date": "2026-09-03",
+        "unit": "celsius"
+      }
+    },
+    "questions": {
+      "unit_match": {
+        "type": "noul",
+        "instructions": "Does `weather_call.unit` match `request.unit`?"
+      }
+    }
+  },
+  "intended_uses": {
+    "unit_match": "Return date-match and unit-match verification as separate consumer outputs."
+  },
+  "review_context": {
+    "questions": {
+      "unit_match": {
+        "atomicity_pairs": [
+          {
+            "pair_id": "weather_date_and_unit_match",
+            "proposition_a": {
+              "id": "weather_date_matches",
+              "text": "`weather_call.date` matches `request.date`.",
+              "source_anchor": "request.state.request.date and request.state.weather_call.date"
+            },
+            "proposition_b": {
+              "id": "weather_unit_matches",
+              "text": "`weather_call.unit` matches `request.unit`.",
+              "source_anchor": "request.state.request.unit and request.state.weather_call.unit"
+            },
+            "consumer_outputs": {
+              "a": "Expose the date-match verification separately.",
+              "b": "Expose the unit-match verification separately."
+            },
+            "independence_evidence": {
+              "case_ref": "matching_date_wrong_unit",
+              "source_anchor": "TypeSafe how-to-build tool-trace decomposition example",
+              "a_truth": true,
+              "b_truth": false
+            }
+          }
+        ]
+      }
+    }
+  }
+}

@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "note": "Expected labels are stored separately and never nested in candidate requests or submitted review state.",
+  "cases": [
+    {
+      "candidate": "candidates/spam-conjunction.json",
+      "group": "spam_credentials_reward",
+      "expected_requires_both_independent_propositions": true,
+      "provenance": "constructed conjunction from official spam decomposition"
+    },
+    {
+      "candidate": "candidates/spam-credential-only.json",
+      "group": "spam_credentials_reward",
+      "expected_requires_both_independent_propositions": false,
+      "provenance": "official atomic credential question"
+    },
+    {
+      "candidate": "candidates/weather-date-and-unit.json",
+      "group": "tool_trace_date_unit",
+      "expected_requires_both_independent_propositions": true,
+      "provenance": "constructed conjunction from official tool-trace decomposition"
+    },
+    {
+      "candidate": "candidates/weather-unit-only.json",
+      "group": "tool_trace_date_unit",
+      "expected_requires_both_independent_propositions": false,
+      "provenance": "official atomic weather unit question"
+    }
+  ]
+}

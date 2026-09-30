@@ -1,0 +1,130 @@
+{
+  "status": "prepared_not_semantically_validated",
+  "provider_calls": 0,
+  "quoted_term": "same operation",
+  "selected_path": "request_state.candidate_text",
+  "occurrence_index": 0,
+  "definitions": {
+    "a": {
+      "id": "same_call_expression",
+      "text": "The same source call expression at the same source location.",
+      "provenance": {
+        "kind": "constructed_diagnostic",
+        "source_anchor": "regressions/semantic-contrast-controls.json#definitions.a"
+      }
+    },
+    "b": {
+      "id": "same_called_function",
+      "text": "Calls invoke the same named function regardless of whether their source locations match.",
+      "provenance": {
+        "kind": "constructed_diagnostic",
+        "source_anchor": "regressions/semantic-contrast-controls.json#definitions.b"
+      }
+    }
+  },
+  "differing_answer_case": {
+    "source_anchor": "constructed control: two distinct call sites both invoke parse_record",
+    "answer_under_a": false,
+    "answer_under_b": true,
+    "model_state": false
+  },
+  "proposed_review_questions": {
+    "rules_out_definition_a": {
+      "type": "noul",
+      "instructions": "Does the actual wording at `selected_path` rule out definition A for the selected occurrence of `quoted_term`?",
+      "criteria": {
+        "true": {
+          "what": "The actual candidate wording states a distinguishing condition incompatible with definition A.",
+          "not_for": "A preference or provenance statement outside the candidate wording.",
+          "examples": [
+            "The wording explicitly restricts the term to a condition excluded by definition A."
+          ]
+        },
+        "false": {
+          "what": "No supplied distinguishing condition rules out definition A for this occurrence.",
+          "not_for": "Proof that definition A is the intended or correct definition.",
+          "examples": [
+            "The wording leaves definition A compatible or does not distinguish it."
+          ]
+        }
+      }
+    },
+    "rules_out_definition_b": {
+      "type": "noul",
+      "instructions": "Does the actual wording at `selected_path` rule out definition B for the selected occurrence of `quoted_term`?",
+      "criteria": {
+        "true": {
+          "what": "The actual candidate wording states a distinguishing condition incompatible with definition B.",
+          "not_for": "A preference or provenance statement outside the candidate wording.",
+          "examples": [
+            "The wording explicitly restricts the term to a condition excluded by definition B."
+          ]
+        },
+        "false": {
+          "what": "No supplied distinguishing condition rules out definition B for this occurrence.",
+          "not_for": "Proof that definition B is the intended or correct definition.",
+          "examples": [
+            "The wording leaves definition B compatible or does not distinguish it."
+          ]
+        }
+      }
+    }
+  },
+  "controls": [
+    {
+      "case_id": "explicitly-selects-a",
+      "request_state": {
+        "candidate_text": "Do `left_call` and `right_call` represent the same operation, meaning the same source call expression at the same source location?"
+      },
+      "expected": {
+        "rules_out_definition_a": false,
+        "rules_out_definition_b": true,
+        "code_outcome": "definition_a_selected"
+      }
+    },
+    {
+      "case_id": "explicitly-selects-b",
+      "request_state": {
+        "candidate_text": "Do `left_call` and `right_call` represent the same operation, meaning calls invoke the same named function regardless of whether their source locations match?"
+      },
+      "expected": {
+        "rules_out_definition_a": true,
+        "rules_out_definition_b": false,
+        "code_outcome": "definition_b_selected"
+      }
+    },
+    {
+      "case_id": "selects-neither",
+      "request_state": {
+        "candidate_text": "Do `left_call` and `right_call` represent the same operation?"
+      },
+      "expected": {
+        "rules_out_definition_a": false,
+        "rules_out_definition_b": false,
+        "code_outcome": "unresolved_contrast"
+      }
+    }
+  ],
+  "truth_table": [
+    {
+      "rules_out_definition_a": false,
+      "rules_out_definition_b": true,
+      "code_outcome": "definition_a_selected"
+    },
+    {
+      "rules_out_definition_a": true,
+      "rules_out_definition_b": false,
+      "code_outcome": "definition_b_selected"
+    },
+    {
+      "rules_out_definition_a": false,
+      "rules_out_definition_b": false,
+      "code_outcome": "unresolved_contrast"
+    },
+    {
+      "rules_out_definition_a": true,
+      "rules_out_definition_b": true,
+      "code_outcome": "host_contrast_unsuitable"
+    }
+  ]
+}

@@ -1,0 +1,140 @@
+{
+  "case_id": "semantic-contrast-a-b-neither-controls",
+  "lifecycle": "constructed_diagnostic_not_current_experiment",
+  "request": {
+    "model": "jev-latest",
+    "state": {
+      "left_call": {
+        "source_location": "alpha.py:10",
+        "called_function": "parse_record"
+      },
+      "right_call": {
+        "source_location": "beta.py:20",
+        "called_function": "parse_record"
+      }
+    },
+    "questions": {
+      "explicitly_selects_a": {
+        "type": "noul",
+        "instructions": "Do `left_call` and `right_call` represent the same operation, meaning the same source call expression at the same source location?",
+        "criteria": {
+          "true": "The two supplied call sites satisfy the exact same-operation definition stated in the instructions.",
+          "false": "The two supplied call sites do not satisfy that exact definition."
+        }
+      },
+      "explicitly_selects_b": {
+        "type": "noul",
+        "instructions": "Do `left_call` and `right_call` represent the same operation, meaning calls invoke the same named function regardless of whether their source locations match?",
+        "criteria": {
+          "true": "The two supplied call sites satisfy the exact same-operation definition stated in the instructions.",
+          "false": "The two supplied call sites do not satisfy that exact definition."
+        }
+      },
+      "selects_neither": {
+        "type": "noul",
+        "instructions": "Do `left_call` and `right_call` represent the same operation?",
+        "criteria": {
+          "true": "The two supplied call sites satisfy the exact same-operation definition stated in the instructions.",
+          "false": "The two supplied call sites do not satisfy that exact definition."
+        }
+      }
+    }
+  },
+  "review_context": {
+    "questions": {
+      "explicitly_selects_a": {
+        "semantic_term_contrasts": [
+          {
+            "contrast_id": "same_operation_meaning",
+            "selected_path": "candidate_question.instructions",
+            "quoted_term": "same operation",
+            "occurrence_index": 0,
+            "definition_a": {
+              "id": "same_call_expression",
+              "text": "The same source call expression at the same source location.",
+              "provenance": {
+                "kind": "constructed_diagnostic",
+                "source_anchor": "regressions/semantic-contrast-controls.json#definitions.a"
+              }
+            },
+            "definition_b": {
+              "id": "same_called_function",
+              "text": "Calls invoke the same named function regardless of whether their source locations match.",
+              "provenance": {
+                "kind": "constructed_diagnostic",
+                "source_anchor": "regressions/semantic-contrast-controls.json#definitions.b"
+              }
+            },
+            "differing_answer_case": {
+              "source_anchor": "constructed control: distinct call sites both invoke parse_record",
+              "answer_under_a": false,
+              "answer_under_b": true
+            }
+          }
+        ]
+      },
+      "explicitly_selects_b": {
+        "semantic_term_contrasts": [
+          {
+            "contrast_id": "same_operation_meaning",
+            "selected_path": "candidate_question.instructions",
+            "quoted_term": "same operation",
+            "occurrence_index": 0,
+            "definition_a": {
+              "id": "same_call_expression",
+              "text": "The same source call expression at the same source location.",
+              "provenance": {
+                "kind": "constructed_diagnostic",
+                "source_anchor": "regressions/semantic-contrast-controls.json#definitions.a"
+              }
+            },
+            "definition_b": {
+              "id": "same_called_function",
+              "text": "Calls invoke the same named function regardless of whether their source locations match.",
+              "provenance": {
+                "kind": "constructed_diagnostic",
+                "source_anchor": "regressions/semantic-contrast-controls.json#definitions.b"
+              }
+            },
+            "differing_answer_case": {
+              "source_anchor": "constructed control: distinct call sites both invoke parse_record",
+              "answer_under_a": false,
+              "answer_under_b": true
+            }
+          }
+        ]
+      },
+      "selects_neither": {
+        "semantic_term_contrasts": [
+          {
+            "contrast_id": "same_operation_meaning",
+            "selected_path": "candidate_question.instructions",
+            "quoted_term": "same operation",
+            "occurrence_index": 0,
+            "definition_a": {
+              "id": "same_call_expression",
+              "text": "The same source call expression at the same source location.",
+              "provenance": {
+                "kind": "constructed_diagnostic",
+                "source_anchor": "regressions/semantic-contrast-controls.json#definitions.a"
+              }
+            },
+            "definition_b": {
+              "id": "same_called_function",
+              "text": "Calls invoke the same named function regardless of whether their source locations match.",
+              "provenance": {
+                "kind": "constructed_diagnostic",
+                "source_anchor": "regressions/semantic-contrast-controls.json#definitions.b"
+              }
+            },
+            "differing_answer_case": {
+              "source_anchor": "constructed control: distinct call sites both invoke parse_record",
+              "answer_under_a": false,
+              "answer_under_b": true
+            }
+          }
+        ]
+      }
+    }
+  }
+}

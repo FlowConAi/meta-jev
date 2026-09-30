@@ -1,0 +1,11 @@
+{
+  "name": "system-one-meta-builder-tooling",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "dependencies": {
+    "jev-compiler": "0.1.0"
+  }
+}
