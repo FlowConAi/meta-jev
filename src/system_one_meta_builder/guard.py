@@ -208,9 +208,14 @@ def _inspection_target(receipt: Mapping[str, Any], scope: str, check_id: str) ->
         return {"path": f"semantic_term_contrasts[{index}]"}
     collection = "state_components" if scope == "question" else "consumer_sites"
     values = state.get(collection, [])
-    if not isinstance(values, list) or index >= len(values) or not isinstance(values[index], Mapping):
+    if not isinstance(values, list):
         return {}
-    selected = values[index]
+    if scope == "workflow":
+        selected = next((site for site in values if site.get("site_id") == f"site_{index}"), None)
+    else:
+        selected = values[index] if index < len(values) else None
+    if not isinstance(selected, Mapping):
+        return {}
     return {key: selected[key] for key in ("path", "site_id", "line", "expression") if key in selected}
 
 
@@ -314,6 +319,7 @@ def _review_input_registry(receipts: Iterable[Mapping[str, Any]]) -> dict[str, A
                 else {}
             ),
             "scope": receipt.get("scope"),
+            **({"workflow_coverage": receipt["workflow_coverage"]} if "workflow_coverage" in receipt else {}),
             "candidate_question_id": receipt.get("candidate_question_id"),
             "candidate_question": state.get("candidate_question"),
             "shared_context": shared_context,
@@ -482,11 +488,91 @@ def actionable_feedback(signals: Iterable[Mapping[str, Any]], policy: Mapping[st
     return feedback
 
 
+def _score_workflow(
+    receipts: list[Mapping[str, Any]],
+    by_binding: Mapping[str, list[dict[str, Any]]],
+    weights: Mapping[str, float],
+    skipped_reviews: Iterable[Mapping[str, Any]],
+    expected_checks: Iterable[str],
+) -> dict[str, Any]:
+    workflow_receipts = [receipt for receipt in receipts if receipt.get("scope") == "workflow"]
+    expected = set(expected_checks)
+    observed: set[str] = set()
+    signals = []
+    packets = []
+    for receipt in workflow_receipts:
+        packet_expected = set(receipt["submitted"]["questions"])
+        expected.update(packet_expected)
+        expected.update(receipt.get("workflow_check_ids", []))
+        packet_signals = by_binding.get(review_binding_id(receipt), [])
+        failed = receipt.get("status") not in (None, "ok")
+        if failed:
+            packet_signals = []
+        packet_observed = {signal["check_id"] for signal in packet_signals}
+        observed.update(packet_observed)
+        signals.extend(packet_signals)
+        packets.append(
+            {
+                "review_binding_id": review_binding_id(receipt),
+                "review_fingerprint": receipt["review_fingerprint"],
+                "expected_check_ids": sorted(packet_expected),
+                "observed_check_ids": sorted(packet_observed),
+                "missing_check_ids": sorted(packet_expected - packet_observed),
+                "unexpected_check_ids": sorted(packet_observed - packet_expected),
+                "unresolved_backticked_paths": list(
+                    receipt.get("state_path_coverage", {}).get("unresolved_backticked_paths", [])
+                ),
+                "status": "incomplete" if failed or packet_expected != packet_observed else "reviewed",
+            }
+        )
+    if not workflow_receipts and not expected:
+        reason = next(
+            (item["reason"] for item in skipped_reviews if item.get("scope") == "workflow"),
+            "workflow.consumer_code was not supplied",
+        )
+        return {"status": "not_reviewed", "score": None, "weighted_risk": None, "coverage": {"reason": reason}}
+    dimensions = {}
+    for dimension, weight in weights.items():
+        applicable = [
+            signal for signal in signals if signal.get("dimension") == dimension and not signal.get("advisory_only")
+        ]
+        risk = max((signal["probability"] for signal in applicable), default=None)
+        dimensions[dimension] = {
+            "weight": weight,
+            "risk": risk,
+            "score": round(100 * (1 - risk), 2) if risk is not None else None,
+            "check_ids": sorted({str(signal["check_id"]) for signal in applicable}),
+        }
+    coverage = {
+        "expected_check_ids": sorted(expected),
+        "observed_check_ids": sorted(observed),
+        "missing_check_ids": sorted(expected - observed),
+        "unexpected_check_ids": sorted(observed - expected),
+        "missing_dimensions": sorted(dimension for dimension, value in dimensions.items() if value["risk"] is None),
+        "packets": sorted(packets, key=lambda packet: packet["review_binding_id"]),
+    }
+    complete = not any(coverage[key] for key in ("missing_check_ids", "unexpected_check_ids", "missing_dimensions"))
+    complete = complete and all(
+        packet["status"] == "reviewed" and not packet["unresolved_backticked_paths"] for packet in packets
+    )
+    weighted_risk = sum(value["weight"] * value["risk"] for value in dimensions.values()) if complete else None
+    return {
+        "status": "reviewed" if complete else "incomplete",
+        "method": "weighted_strongest_applicable_check_per_workflow_dimension",
+        "score": round(100 * (1 - weighted_risk), 2) if weighted_risk is not None else None,
+        "weighted_risk": round(weighted_risk, 6) if weighted_risk is not None else None,
+        "dimensions": dimensions,
+        "coverage": coverage,
+        "meaning": "Separate integration index; not blended into question design.",
+    }
+
+
 def score_reviews(
     receipts: Iterable[Mapping[str, Any]],
     signals: list[dict[str, Any]],
     policy: Mapping[str, Any],
     skipped_reviews: Iterable[Mapping[str, Any]] = (),
+    expected_workflow_checks: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Score complete per-question reviews and keep workflow review separate."""
     weights = policy["question_dimension_weights"]
@@ -498,15 +584,7 @@ def score_reviews(
         by_binding.setdefault(str(signal["review_binding_id"]), []).append(signal)
 
     question_scores: list[dict[str, Any]] = []
-    workflow_grade: dict[str, Any] = {
-        "status": "not_reviewed",
-        "score": None,
-        "weighted_risk": None,
-        "coverage": {"reason": "workflow.consumer_code was not supplied"},
-    }
-    for skipped in skipped_reviews:
-        if skipped.get("scope") == "workflow":
-            workflow_grade["coverage"] = {"reason": skipped["reason"]}
+    workflow_grade = _score_workflow(receipts, by_binding, workflow_weights, skipped_reviews, expected_workflow_checks)
     for receipt in receipts:
         if receipt.get("scope") == "criteria_condition":
             continue
@@ -520,35 +598,6 @@ def score_reviews(
             "unexpected_check_ids": sorted(observed_checks - expected_checks),
         }
         if receipt.get("scope") == "workflow":
-            dimensions: dict[str, Any] = {}
-            for dimension, weight in workflow_weights.items():
-                dimension_signals = [
-                    signal
-                    for signal in receipt_signals
-                    if signal.get("dimension") == dimension and not signal.get("advisory_only")
-                ]
-                risk = max((signal["probability"] for signal in dimension_signals), default=None)
-                dimensions[dimension] = {
-                    "weight": weight,
-                    "risk": risk,
-                    "score": round(100 * (1 - risk), 2) if risk is not None else None,
-                    "check_ids": sorted(str(signal["check_id"]) for signal in dimension_signals),
-                }
-            missing_dimensions = sorted(dimension for dimension, value in dimensions.items() if value["risk"] is None)
-            coverage["missing_dimensions"] = missing_dimensions
-            complete = (
-                not coverage["missing_check_ids"] and not coverage["unexpected_check_ids"] and not missing_dimensions
-            )
-            weighted_risk = sum(value["weight"] * value["risk"] for value in dimensions.values()) if complete else None
-            workflow_grade = {
-                "status": "reviewed" if complete else "incomplete",
-                "method": "weighted_strongest_applicable_check_per_workflow_dimension",
-                "score": round(100 * (1 - weighted_risk), 2) if weighted_risk is not None else None,
-                "weighted_risk": round(weighted_risk, 6) if weighted_risk is not None else None,
-                "dimensions": dimensions,
-                "coverage": coverage,
-                "meaning": "Separate integration index; not blended into question design.",
-            }
             continue
 
         dimensions: dict[str, Any] = {}
@@ -724,7 +773,13 @@ def guard_report(
         [*model_observations, *(item for item in atomicity if item["minimum_support_index"] is not None)], route_policy
     )
     selected_route = route(policy_signals, route_policy)
-    scoring = score_reviews(receipts, model_observations, score_policy, skipped_reviews)
+    expected_workflow_checks = {
+        check_id
+        for item in (analysis_ownership or {}).get("semantic", [])
+        if item["scope"] == "workflow"
+        for check_id in item["check_ids"]
+    }
+    scoring = score_reviews(receipts, model_observations, score_policy, skipped_reviews, expected_workflow_checks)
     if selected_route == "ready_for_small_trial" and scoring["workflow"]["status"] == "not_reviewed":
         selected_route = "ready_for_small_trial_questions_only"
     policy_observations = [signal for signal in model_observations if not signal.get("advisory_only")]
@@ -806,6 +861,8 @@ def guard_report(
         )
     if scoring["workflow"]["status"] == "not_reviewed":
         missing_information.append({"workflow": scoring["workflow"]["coverage"]["reason"]})
+    elif scoring["workflow"]["status"] == "incomplete":
+        missing_information.append({"workflow": scoring["workflow"]["coverage"]})
     if mixed_served_models:
         missing_information.append(
             {"reason": "review responses came from different concrete model versions", "served_models": served_models}

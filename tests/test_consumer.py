@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from system_one_meta_builder.consumer import inspect_python_consumer
+from system_one_meta_builder.io import resolve_path
 from system_one_meta_builder.review import review_requests
 
 QUESTIONS = {
@@ -39,18 +40,51 @@ def test_answer_roots_aliases_and_declared_reads_resolve_question_provenance() -
         "    probabilities = {name: result.probability for name, result in answers.checks.items()}\n"
         "    picks = {name: pick.confidence for name, pick in answers.picks.items()}\n"
         "    combined = min(probabilities[q] for q in STALE_PARTS)\n"
-        "    publish(probabilities, picks, combined)"
+        "    publish(probabilities, picks, combined)\n"
+        "def summarize(answers):\n"
+        "    return max(result.probability for result in answers.checks.values())"
     )
     bindings = [
         {"line": 3, "expression": "result.probability", "answer_field": "noul", "question_ids": ["risk"]},
         {"line": 4, "expression": "pick.confidence", "answer_field": "confidence", "question_ids": ["route"]},
         {"line": 5, "expression": "probabilities[q]", "answer_field": "noul", "question_ids": ["risk"]},
+        {"line": 8, "expression": "result.probability", "answer_field": "noul", "question_ids": ["risk"]},
     ]
     document = {"request": {"state": {}, "questions": QUESTIONS}, "workflow": {"consumer_code": code}}
     assert review_requests(document)[-1]["status"] == "not_reviewed"
     document["workflow"]["answer_bindings"] = bindings
-    workflow = review_requests(document)[-1]
+    packets = [item for item in review_requests(document) if item["scope"] == "workflow"]
+    assert len(packets) == 2
+    workflow = packets[0]
     sites = workflow["submitted"]["state"]["consumer_sites"]
+    collected = inspect_python_consumer(code, QUESTIONS, bindings)
+    assert {site["site_id"] for packet in packets for site in packet["submitted"]["state"]["consumer_sites"]} == {
+        site["site_id"] for site in collected["sites"]
+    }
+    check_ids = [check_id for packet in packets for check_id in packet["submitted"]["questions"]]
+    assert len(check_ids) == len(set(check_ids))
+    assert set(check_ids) == set(workflow["workflow_check_ids"])
+    assert all(packet["state_path_coverage"]["review_question_unresolved_paths"] == [] for packet in packets)
+    for packet in packets:
+        state = packet["submitted"]["state"]
+        assert len(state["workflow_coverage"]["source_contexts"]) == 1
+        assert state["workflow_coverage"]["source_contexts"][0] in collected["source_contexts"]
+        for check_id, question in packet["submitted"]["questions"].items():
+            inspect = question["instructions"]["inspect"]
+            paths = [inspect] if isinstance(inspect, str) else inspect
+            selected = next(path.split(".")[0] for path in paths if path.startswith("consumer_sites["))
+            site = resolve_path(state, selected)
+            assert site["site_id"] == f"site_{check_id.rsplit('__', 1)[1]}"
+        for site in state["consumer_sites"]:
+            assert resolve_path(state, site["source_context_path"]) in collected["source_contexts"]
+            assert site["source_context_path"] == "workflow_coverage.source_contexts[0]"
+            original = next(item for item in collected["sites"] if item["site_id"] == site["site_id"])
+            assert resolve_path(state, site["source_context_path"]) == resolve_path(
+                {"workflow_coverage": collected}, original["source_context_path"]
+            )
+            assert {key: value for key, value in site.items() if key != "source_context_path"} == {
+                key: value for key, value in original.items() if key != "source_context_path"
+            }
     reads = [site for site in sites if site["kind"] == "answer_read"]
     assert [(site["expression"], site["answer_fields"], list(site["relevant_questions"])) for site in reads] == [
         ("result.probability", ["noul"], ["risk"]),

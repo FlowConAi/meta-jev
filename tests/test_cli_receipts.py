@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import json
+from copy import deepcopy
 from pathlib import Path
 
+import httpx2
 import pytest
 from typesafe_sdk import TypeSafeError
 
-from system_one_meta_builder import cli
+from system_one_meta_builder import cli, sdk
 from system_one_meta_builder.guard import (
     SCORING_POLICY_VERSION,
     actionable_feedback,
+    guard_report,
     reusable_reviews,
+    review_signals,
     route,
     routing_policy,
     score_reviews,
@@ -18,7 +22,7 @@ from system_one_meta_builder.guard import (
 )
 from system_one_meta_builder.io import json_line
 from system_one_meta_builder.receipts import request_sha256, review_binding_id, success_receipt
-from system_one_meta_builder.review import PER_QUESTION_CHECKS, review_requests
+from system_one_meta_builder.review import PER_QUESTION_CHECKS, check_metadata, review_requests
 
 
 def _candidate(state: str = "cancel it") -> dict:
@@ -396,20 +400,42 @@ def test_workflow_weighting_score_stays_separate_from_question_design(
     document = _candidate()
     document["workflow"] = {
         "purpose": "Queue low-preservation cases for review using a documented policy.",
-        "consumer_code": 'risk = answers["cancel"].noul * 0.7; queue_review(risk)',
+        "consumer_code": (
+            "def weighted(answers):\n"
+            '    risk = answers["cancel"].noul * 0.7; queue_review(risk)\n'
+            "def separate(answers):\n"
+            '    risk = answers["cancel"].noul * 0.3; queue_review(risk)'
+        ),
+        "answer_bindings": [
+            {"line": line, "expression": 'answers["cancel"].noul', "answer_field": "noul", "question_ids": ["cancel"]}
+            for line in (2, 4)
+        ],
     }
     candidate = tmp_path / "candidate.json"
     output = tmp_path / "guard.jsonl"
     _write(candidate, document)
 
-    def response(submitted: dict, _questions: dict, **_kwargs: object) -> tuple[dict, float]:
-        raw = _low_response(submitted)
-        for check_id, answer in raw["answers"].items():
-            if check_id.startswith("answer_weights_lack_explicit_policy__"):
-                answer["noul"] = 0.9
-        return raw, 0.1
+    real_client = httpx2.Client
+    wire_requests = []
 
-    monkeypatch.setattr(cli, "call_once", response)
+    def response(request: httpx2.Request) -> httpx2.Response:
+        submitted = json.loads(request.read())
+        wire_requests.append(submitted)
+        raw = _low_response(submitted)
+        if any(
+            "def weighted(" in context["enclosing_function"]
+            for context in submitted["state"].get("workflow_coverage", {}).get("source_contexts", [])
+        ):
+            for check_id, answer in raw["answers"].items():
+                if check_id.startswith("answer_weights_lack_explicit_policy__"):
+                    answer["noul"] = 0.9
+        return httpx2.Response(200, json=raw, request=request)
+
+    def local_client(*args, **kwargs):
+        return real_client(*args, **kwargs, transport=httpx2.MockTransport(response))
+
+    monkeypatch.setenv("TYPESAFE_API_KEY", "offline-test-credential")
+    monkeypatch.setattr(sdk.httpx2, "Client", local_client)
     assert (
         cli.main(
             [
@@ -431,3 +457,55 @@ def test_workflow_weighting_score_stays_separate_from_question_design(
     assert report["scoring"]["questions"][0]["coverage"]["missing_dimensions"] == ["atomicity"]
     assert report["scoring"]["workflow"]["score"] == 61.0
     assert report["scoring"]["workflow"]["dimensions"]["workflow_weighting"]["risk"] == 0.9
+
+    rows = [json.loads(line) for line in output.read_text().splitlines()]
+    receipts = [row for row in rows if row.get("kind") == "review" and row.get("status") == "ok"]
+    workflow_receipts = [row for row in receipts if row.get("scope") == "workflow"]
+    assert len(workflow_receipts) == 2
+    assert len(wire_requests) == len(receipts)
+    metadata = {scope: check_metadata(scope) for scope in ("question", "workflow", "criteria_condition")}
+    signals = review_signals(receipts, metadata)
+    scored = score_reviews(receipts, signals, scoring_policy())["workflow"]
+    assert score_reviews(reversed(receipts), list(reversed(signals)), scoring_policy())["workflow"] == scored
+    expected = {check for receipt in workflow_receipts for check in receipt["submitted"]["questions"]}
+    assert set(scored["coverage"]["expected_check_ids"]) == expected
+    assert set(scored["coverage"]["observed_check_ids"]) == expected
+    assert scored["coverage"]["missing_check_ids"] == []
+    for signal in signals:
+        if signal["scope"] == "workflow":
+            target = signal["inspection_target"]
+            assert target["site_id"] == f"site_{signal['check_id'].rsplit('__', 1)[1]}"
+            assert target["site_id"] in {
+                site["site_id"]
+                for receipt in workflow_receipts
+                for site in receipt["submitted"]["state"]["consumer_sites"]
+            }
+    for removed in workflow_receipts:
+        remaining = [receipt for receipt in receipts if receipt is not removed]
+        incomplete = score_reviews(remaining, review_signals(remaining, metadata), scoring_policy())["workflow"]
+        assert incomplete["status"] == "incomplete"
+        assert incomplete["score"] is None
+        assert set(incomplete["coverage"]["missing_check_ids"]) == set(removed["submitted"]["questions"])
+        failed = deepcopy(removed)
+        failed["status"] = "error"
+        failed.pop("response")
+        assert (
+            score_reviews([*remaining, failed], review_signals(remaining, metadata), scoring_policy())["workflow"][
+                "status"
+            ]
+            == "incomplete"
+        )
+
+    question_receipts = [receipt for receipt in receipts if receipt.get("scope") != "workflow"]
+    absent = guard_report(
+        document=document,
+        receipts=question_receipts,
+        signals=review_signals(question_receipts, metadata),
+        route_policy=routing_policy(0.2, 0.8),
+        score_policy=scoring_policy(),
+        candidate_request_sha256=report["candidate_request_sha256"],
+        analysis_ownership=report["analysis_ownership"],
+    )
+    assert absent["scoring"]["workflow"]["status"] == "incomplete"
+    assert set(absent["scoring"]["workflow"]["coverage"]["missing_check_ids"]) == expected
+    assert any("workflow" in item for item in absent["policy_conclusions"]["missing_information"])
