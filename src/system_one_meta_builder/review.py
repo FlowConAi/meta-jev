@@ -1048,36 +1048,61 @@ def review_requests(document: Any, model: str | None = None) -> list[dict[str, A
         return prepared
 
     sites = analysis["sites"]
-    checks = _workflow_checks(sites)
-    principle_ids = {principle_id for spec in checks.values() for principle_id in spec["principle_ids"]}
+    all_checks = _workflow_checks(sites)
     coverage = {key: value for key, value in analysis.items() if key != "sites"}
-    state = {
-        "purpose": workflow.get("purpose"),
-        "consumer_sites": sites,
-        "workflow_coverage": coverage,
-        "request_state": request["state"],
-        "principles": selected_principles(principle_ids),
-    }
-    submitted = {
-        "state": state,
-        "questions": {name: value.model_dump(mode="json", exclude_none=True) for name, value in _nouls(checks).items()},
-        "model": model or DEFAULT_MODEL,
-    }
-    generated_unresolved_paths = _unresolved_question_paths(state, submitted["questions"])
-    prepared.append(
-        {
-            "scope": "workflow",
-            "workflow_coverage": coverage,
-            "state_path_coverage": {
-                "selected_paths": [],
-                "unresolved_backticked_paths": generated_unresolved_paths,
-                "review_question_unresolved_paths": generated_unresolved_paths,
-            },
-            "principle_provenance": principle_provenance(principle_ids),
-            "review_fingerprint": fingerprint(submitted),
-            "submitted": submitted,
+    groups: dict[str | None, list[tuple[int, dict[str, Any]]]] = {}
+    for index, site in enumerate(sites):
+        groups.setdefault(site.get("source_context_path"), []).append((index, site))
+    for context_path, group in groups.items():
+        packet_sites = []
+        checks: dict[str, dict[str, Any]] = {}
+        for local_index, (global_index, site) in enumerate(group):
+            packet_site = deepcopy(site)
+            if context_path is not None:
+                packet_site["source_context_path"] = "workflow_coverage.source_contexts[0]"
+            packet_sites.append(packet_site)
+            for check_id, original in all_checks.items():
+                if check_id.endswith(f"__{global_index}"):
+                    check = deepcopy(original)
+                    check["instructions"] = _replace_instruction_path(
+                        check["instructions"], f"consumer_sites[{global_index}]", f"consumer_sites[{local_index}]"
+                    )
+                    checks[check_id] = check
+        packet_coverage = {"status": analysis["status"], "language": language, "site_count": len(packet_sites)}
+        if context_path is not None:
+            packet_coverage["source_contexts"] = [_resolve_path({"workflow_coverage": coverage}, context_path)]
+            packet_coverage["coverage_scope"] = coverage["coverage_scope"]
+        principle_ids = {principle_id for spec in checks.values() for principle_id in spec["principle_ids"]}
+        state = {
+            "purpose": workflow.get("purpose"),
+            "consumer_sites": packet_sites,
+            "workflow_coverage": packet_coverage,
+            "request_state": request["state"],
+            "principles": selected_principles(principle_ids),
         }
-    )
+        submitted = {
+            "state": state,
+            "questions": {
+                name: value.model_dump(mode="json", exclude_none=True) for name, value in _nouls(checks).items()
+            },
+            "model": model or DEFAULT_MODEL,
+        }
+        generated_unresolved_paths = _unresolved_question_paths(state, submitted["questions"])
+        prepared.append(
+            {
+                "scope": "workflow",
+                "workflow_coverage": coverage,
+                "workflow_check_ids": sorted(all_checks),
+                "state_path_coverage": {
+                    "selected_paths": [],
+                    "unresolved_backticked_paths": generated_unresolved_paths,
+                    "review_question_unresolved_paths": generated_unresolved_paths,
+                },
+                "principle_provenance": principle_provenance(principle_ids),
+                "review_fingerprint": fingerprint(submitted),
+                "submitted": submitted,
+            }
+        )
     return prepared
 
 

@@ -53,6 +53,7 @@ A candidate can be a System One request or a wrapper that adds case identity, in
 
 - Jev makes **atomic typed judgments**. Code owns validation, arithmetic, weights, routing, and side effects. A Noul probability is not an explanation or a separate confidence score.
 - Every live attempt has append-only receipts with the submitted request, raw transport response, served model, usage, and terminal outcome. `jev-latest` is the default alias; compare or calibrate against the **served version**, not just the requested alias.
+- Workflow checks share a packet only with sites in the same collected source context. Every packet remains separate in receipts; the workflow score uses the strongest applicable risk across all packets, and missing packets remain incomplete.
 - Missing question evidence, unresolved state references, and unsupported consumer code remain visible as incomplete. Python consumer analysis supports direct SDK reads and [explicit host-declared bindings](docs/reference.md#candidate-input) for adapter or scalar-map reads. A declared join is not proof of runtime data flow or consumer semantics.
 - A `ready_for_small_trial` route means try a small labelled batch. It does **not** certify correctness or whole-experiment readiness. Keep blind labels and held-out cases before making quality claims.
 

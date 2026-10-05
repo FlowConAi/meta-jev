@@ -165,6 +165,9 @@ Reusing one retained answer for two components keeps both current source binding
   question clarity `0.15`, state clarity `0.15`, primitive suitability `0.15`, evidence sufficiency
   `0.20`, and task suitability `0.15`. The request score is the minimum complete question score.
   Workflow consumption and answer weighting are graded separately with weights `0.60` and `0.40`.
+  Their strongest applicable risks are aggregated across all workflow packets, independent of
+  receipt order. Expected, observed, missing and unexpected check IDs are unioned; a missing or
+  failed packet suppresses the workflow score. Each packet retains its own fingerprint and receipt.
   `--policy FILE` can replace either complete weight dictionary with `question_dimension_weights`
   and `workflow_dimension_weights`; each dictionary must sum to `1`. Scores never override an
   individual flagged condition or the guard route.
@@ -204,6 +207,15 @@ permanent model limitation.
 | Weights and composition | Unexplained weights; prerequisite hidden by compensation; differently ranged Scores unnormalised; Noul product claimed as joint probability | Exact arithmetic expression, branch, downstream uses, purpose, and relevant questions | Composition-specific actions | Multiplication and weighting are not blanket defects; each check requires the claimed misuse. |
 | Response-model consistency | Concrete provider models differ or model identity is missing across review receipts | Receipt metadata, outside model state | `review_required` | Unit tests prove incomplete or mixed versions cannot route ready; every concrete model remains visible. |
 | Observation integrity | Choice/Score confidence, Score distribution spread, and non-applicable receipt rows | Stored run receipts only | Preserve each measured field or state why a row was skipped | Tests prove provider confidence is retained and every input row is accounted for. |
+
+Workflow packets group sites by their collected source context/enclosing function. Each sends only
+that group's sites and exact context, with site and context references rebased to the packet; logical
+check IDs, criteria, primitive bindings and source bytes are preserved. Direct SDK sites without a
+collected context retain their existing shared packet. Complete source coverage and the expected
+check inventory remain in deterministic prepared/report metadata, outside model state. This is
+selection of the evidence for each existing check, not truncation or a provider-limit guarantee.
+A necessary context that still exceeds provider capacity remains available and unresolved; splitting
+questions cannot reduce an oversized shared state.
 
 Independent candidate-question and workflow review requests are dispatched concurrently through
 the official SDK. Questions within each request also run in parallel. Every worker appends its own
