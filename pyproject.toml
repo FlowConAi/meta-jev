@@ -20,7 +20,7 @@ build-backend = "uv_build"
 [dependency-groups]
 dev = [
   "jsonschema>=4.25,<5",
-  "pytest>=8.4,<9",
+  "pytest>=9.0.3,<10",
   "ruff>=0.13,<0.14",
 ]
 
