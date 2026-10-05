@@ -111,6 +111,9 @@ def _analysis_ownership(prepared: list[dict[str, Any]], findings: list[dict[str,
             }
             if "operation" in site:
                 observation["operation"] = site["operation"]
+            if "binding_provenance" in site:
+                observation["binding_provenance"] = site["binding_provenance"]
+                observation["source_context_path"] = site["source_context_path"]
             code_known.append(observation)
 
     for finding in findings:

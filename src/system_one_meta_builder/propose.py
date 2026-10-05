@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from typing import Any
 
+from .consumer import ANSWER_FIELDS
 from .sdk import question_schema
 
 
@@ -62,6 +63,19 @@ def proposal_brief(
                     "properties": {
                         "purpose": {"type": "string"},
                         "consumer_code": {"type": "string"},
+                        "answer_bindings": {
+                            "type": "array",
+                            "items": {
+                                "type": "object",
+                                "required": ["line", "expression", "answer_field", "question_ids"],
+                                "properties": {
+                                    "line": {"type": "integer", "minimum": 1},
+                                    "expression": {"type": "string"},
+                                    "answer_field": {"enum": sorted(ANSWER_FIELDS)},
+                                    "question_ids": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+                                },
+                            },
+                        },
                     },
                 },
             },

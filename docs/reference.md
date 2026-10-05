@@ -45,6 +45,30 @@ Instructions and criteria may be strings, objects, arrays, or null where the SDK
 Choice descriptions may be null. The CLI rejects duplicate JSON keys so a repeated question id is
 not silently discarded.
 
+For an adapter result or scalar probability map, optional `workflow.answer_bindings` selects
+actual attribute or subscript reads in `consumer_code`:
+
+```json
+{"line": 1, "expression": "result.probability", "answer_field": "noul", "question_ids": ["preserves_first_requirement"]}
+```
+
+Each entry names a one-based code line, a Python expression, its original SDK answer field, and
+the exact candidate question IDs that reach that read. The host must verify the adapter's decoder
+and downstream join before declaring them. Code checks AST presence and primitive/field
+compatibility using the installed SDK. Unknown IDs, incompatible fields, missing reads, and
+conflicting declarations leave workflow coverage `not_reviewed`. Each selected site and its
+structural observation retain `binding_provenance: host_declared`; this proves the declared join
+and actual code location, not runtime data flow or calibrated consumer semantics. A dynamic
+collection read may name several questions; it does not select or manufacture their answers.
+Omitting the option preserves direct SDK-root collection. Undeclared paths outside that bounded
+collector remain unsupported; declarations do not establish whole-program coverage.
+Host-declared reads inside `min`/`max` calls also select those actual composition sites.
+Review state includes each selected read's enclosing function and directly referenced literal
+module constants once, through `workflow_coverage.source_contexts`. Other referenced names remain
+listed as `unresolved_dependencies`; code does not trace helper calls or prior-answer transport.
+The complete consumer source remains part of the candidate evidence, not a whole-source model
+state dump.
+
 Optional review-context containers (`review_context`, its `questions`, and each question entry)
 may be omitted or null; both mean absent. Other non-object values are input errors before any call.
 Semantic term contrasts require two different reference answers valid for the candidate primitive:
@@ -115,8 +139,9 @@ Reusing one retained answer for two components keeps both current source binding
   answer read and composition site, and supplies only the relevant candidate questions and downstream
   branch statements. Missing code, non-Python code, unparseable code, and code with no resolvable
   typed-answer read are recorded as `not_reviewed`. The bounded collector uses the declared
-  `answers` or `response.answers` input root and straight-line local aliases. It does not prove
-  interprocedural data flow; supply the direct consumption site when a helper boundary hides it.
+  `answers` or `response.answers` input root and straight-line local aliases, or explicit
+  host-declared bindings to actual reads. It does not infer interprocedural data flow; supply the
+  actual consumption sites and verified declarations when an adapter or helper boundary hides them.
 - `guard INPUT --output FILE` is the coding-agent preflight. `--code-only` performs free structural
   checks and returns exact missing state paths without making a provider call. Normal `guard` also
   stops before inference when those paths cannot be resolved. Criteria remain optional; their absence
