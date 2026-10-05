@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 from system_one_meta_builder.consumer import inspect_python_consumer
+from system_one_meta_builder.review import review_requests
 
 QUESTIONS = {
     "risk": {"type": "noul", "instructions": "Does the supplied message contain risk?"},
-    "route": {"type": "choice", "instructions": "Which route applies?"},
+    "route": {"type": "choice", "instructions": "Which route applies?", "criteria": {"review": None, "publish": None}},
 }
 
 
-def test_official_answer_roots_and_common_local_aliases_resolve_question_provenance() -> None:
+def test_answer_roots_aliases_and_declared_reads_resolve_question_provenance() -> None:
     result = inspect_python_consumer(
         "\n".join(
             (
@@ -31,6 +32,54 @@ def test_official_answer_roots_and_common_local_aliases_resolve_question_provena
         ("risk_answer.noul", ("risk",)),
         ("route_answer.confidence", ("route",)),
     }
+
+    code = (
+        "STALE_PARTS = ('risk',)\n"
+        "def consume(answers):\n"
+        "    probabilities = {name: result.probability for name, result in answers.checks.items()}\n"
+        "    picks = {name: pick.confidence for name, pick in answers.picks.items()}\n"
+        "    combined = min(probabilities[q] for q in STALE_PARTS)\n"
+        "    publish(probabilities, picks, combined)"
+    )
+    bindings = [
+        {"line": 3, "expression": "result.probability", "answer_field": "noul", "question_ids": ["risk"]},
+        {"line": 4, "expression": "pick.confidence", "answer_field": "confidence", "question_ids": ["route"]},
+        {"line": 5, "expression": "probabilities[q]", "answer_field": "noul", "question_ids": ["risk"]},
+    ]
+    document = {"request": {"state": {}, "questions": QUESTIONS}, "workflow": {"consumer_code": code}}
+    assert review_requests(document)[-1]["status"] == "not_reviewed"
+    document["workflow"]["answer_bindings"] = bindings
+    workflow = review_requests(document)[-1]
+    sites = workflow["submitted"]["state"]["consumer_sites"]
+    reads = [site for site in sites if site["kind"] == "answer_read"]
+    assert [(site["expression"], site["answer_fields"], list(site["relevant_questions"])) for site in reads] == [
+        ("result.probability", ["noul"], ["risk"]),
+        ("pick.confidence", ["confidence"], ["route"]),
+        ("probabilities[q]", ["noul"], ["risk"]),
+    ]
+    assert all(site["binding_provenance"] == "host_declared" for site in reads)
+    assert len(reads[0]["downstream_uses"]) == 2
+    assert "publish(probabilities, picks, combined)" in reads[0]["downstream_uses"]
+    composition = next(site for site in sites if site["kind"] == "composition")
+    assert composition["operation"] == "min"
+    assert list(composition["relevant_questions"]) == ["risk"]
+    assert composition["binding_provenance"] == ["host_declared"]
+    assert "required_condition_hidden_by_compensation__0" in workflow["submitted"]["questions"]
+    context = workflow["workflow_coverage"]["source_contexts"][0]
+    assert context["referenced_constants"] == {"STALE_PARTS": "STALE_PARTS = ('risk',)"}
+    assert context["unresolved_dependencies"] == ["publish"]
+    assert "consumer_code" not in workflow["submitted"]["state"]
+
+    for invalid in (
+        {**bindings[0], "question_ids": ["absent"]},
+        {**bindings[0], "answer_field": "confidence"},
+        {**bindings[0], "expression": "missing.probability"},
+        {**bindings[0], "line": 4},
+    ):
+        document["workflow"]["answer_bindings"] = [invalid, bindings[1]]
+        refused = review_requests(document)[-1]
+        assert refused["status"] == "not_reviewed"
+        assert "answer_bindings" in refused["reason"]
 
 
 def test_foreign_attributes_and_shadowed_names_are_not_candidate_answers() -> None:

@@ -1042,7 +1042,7 @@ def review_requests(document: Any, model: str | None = None) -> list[dict[str, A
     if language != "python":
         prepared.append(_not_reviewed(f"workflow language {language!r} is not supported; only Python is reviewed"))
         return prepared
-    analysis = inspect_python_consumer(workflow["consumer_code"], normalized)
+    analysis = inspect_python_consumer(workflow["consumer_code"], normalized, workflow.get("answer_bindings"))
     if analysis["status"] != "reviewed":
         prepared.append(_not_reviewed(str(analysis["reason"])))
         return prepared

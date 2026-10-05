@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import ast
+import builtins
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
+
+from typesafe_sdk import ChoiceAnswer, NoulAnswer, ScoreAnswer
 
 ANSWER_FIELDS = {"noul", "choice", "score", "probabilities", "confidence"}
 
@@ -42,6 +45,11 @@ class _StoredNames(ast.NodeVisitor):
 
     def visit_Lambda(self, _node: ast.Lambda) -> None:
         return
+
+    def visit_ExceptHandler(self, node: ast.ExceptHandler) -> None:
+        if node.name is not None:
+            self.names.add(node.name)
+        self.generic_visit(node)
 
 
 class _AnswerAccessCollector(ast.NodeVisitor):
@@ -275,10 +283,78 @@ def _ancestor(
     return None
 
 
-def _answer_accesses(node: ast.AST, resolved: Mapping[ast.Attribute, str]) -> list[tuple[ast.Attribute, str]]:
-    return [
-        (child, resolved[child]) for child in ast.walk(node) if isinstance(child, ast.Attribute) and child in resolved
+@dataclass(frozen=True)
+class _AnswerRead:
+    question_ids: tuple[str, ...]
+    field: str
+    provenance: str
+
+
+def _answer_accesses(node: ast.AST, resolved: Mapping[ast.expr, _AnswerRead]) -> list[tuple[ast.expr, _AnswerRead]]:
+    return [(child, resolved[child]) for child in ast.walk(node) if child in resolved]
+
+
+def _composition_operation(node: ast.AST, resolved: Mapping[ast.expr, _AnswerRead]) -> str | None:
+    if isinstance(node, ast.BinOp):
+        return type(node.op).__name__
+    if (
+        isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id in {"min", "max"}
+        and any(read.provenance == "host_declared" for _, read in _answer_accesses(node, resolved))
+    ):
+        return node.func.id
+    return None
+
+
+def _bind_declared_reads(
+    tree: ast.AST, questions: Mapping[str, Any], bindings: Any, resolved: dict[ast.expr, _AnswerRead]
+) -> None:
+    """Validate host-declared joins; this does not infer runtime data flow."""
+    if bindings is None:
+        return
+    if not isinstance(bindings, list):
+        raise ValueError("must be a list")
+    expressions = [
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, (ast.Attribute, ast.Subscript)) and isinstance(node.ctx, ast.Load)
     ]
+    declared: set[ast.expr] = set()
+    for index, binding in enumerate(bindings):
+        prefix = f"entry {index}"
+        if not isinstance(binding, Mapping):
+            raise ValueError(f"{prefix} must be an object")
+        expression, line = binding.get("expression"), binding.get("line")
+        if not isinstance(expression, str) or type(line) is not int:
+            raise ValueError(f"{prefix} requires an expression and integer line")
+        try:
+            parsed = ast.parse(expression, mode="eval").body
+        except SyntaxError as error:
+            raise ValueError(f"{prefix} expression is not parseable Python") from error
+        nodes = [node for node in expressions if node.lineno == line and ast.dump(node) == ast.dump(parsed)]
+        if not nodes:
+            raise ValueError(f"{prefix} does not select an actual attribute or subscript read")
+        question_ids, field = binding.get("question_ids"), binding.get("answer_field")
+        if not isinstance(question_ids, list) or not question_ids or not all(isinstance(q, str) for q in question_ids):
+            raise ValueError(f"{prefix} requires nonempty question_ids")
+        for question_id in question_ids:
+            if question_id not in questions:
+                raise ValueError(f"{prefix} has unknown question ID {question_id!r}")
+            model = {"noul": NoulAnswer, "choice": ChoiceAnswer, "score": ScoreAnswer}[questions[question_id]["type"]]
+            if not isinstance(field, str) or field not in ANSWER_FIELDS or field not in model.model_fields:
+                raise ValueError(f"{prefix} field {field!r} is incompatible with question {question_id!r}")
+        read = _AnswerRead(tuple(question_ids), field, "host_declared")
+        for node in nodes:
+            if isinstance(node, ast.Attribute) and node.attr in ANSWER_FIELDS and node.attr != field:
+                raise ValueError(f"{prefix} field differs from the actual typed field read")
+            existing = resolved.get(node)
+            if node in declared or (
+                existing is not None and (existing.question_ids, existing.field) != (read.question_ids, field)
+            ):
+                raise ValueError(f"{prefix} conflicts with another answer binding")
+            resolved[node] = read
+            declared.add(node)
 
 
 def _lexical_scope(node: ast.AST, parents: Mapping[ast.AST, ast.AST]) -> ast.AST:
@@ -317,7 +393,39 @@ def _downstream_uses(statement: ast.AST, tree: ast.AST, parents: Mapping[ast.AST
     return downstream
 
 
-def inspect_python_consumer(code: str, questions: Mapping[str, Any]) -> dict[str, Any]:
+def _declared_context(node: ast.AST, code: str, tree: ast.Module, parents: Mapping[ast.AST, ast.AST]) -> dict[str, Any]:
+    scope = _ancestor(node, parents, (ast.FunctionDef, ast.AsyncFunctionDef)) or node
+    stored = _StoredNames()
+    body = scope.body if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)) else [scope]
+    for statement in body:
+        stored.visit(statement)
+    if isinstance(scope, (ast.FunctionDef, ast.AsyncFunctionDef)):
+        stored.names.update(argument.arg for argument in ast.walk(scope.args) if isinstance(argument, ast.arg))
+    referenced = {
+        child.id
+        for statement in body
+        for child in ast.walk(statement)
+        if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Load)
+    } - stored.names
+    constants: dict[str, str] = {}
+    for statement in tree.body:
+        if isinstance(statement, (ast.Assign, ast.AnnAssign)) and statement.value is not None:
+            targets = statement.targets if isinstance(statement, ast.Assign) else [statement.target]
+            try:
+                ast.literal_eval(statement.value)
+            except (ValueError, TypeError):
+                continue
+            for target in targets:
+                if isinstance(target, ast.Name) and target.id in referenced:
+                    constants[target.id] = ast.get_source_segment(code, statement) or ast.unparse(statement)
+    return {
+        "enclosing_function": ast.get_source_segment(code, scope) if scope is not node else None,
+        "referenced_constants": constants,
+        "unresolved_dependencies": sorted(referenced - constants.keys() - vars(builtins).keys()),
+    }
+
+
+def inspect_python_consumer(code: str, questions: Mapping[str, Any], answer_bindings: Any = None) -> dict[str, Any]:
     """Return exact typed-answer reads and arithmetic sites from parseable Python code."""
     try:
         tree = ast.parse(code)
@@ -332,14 +440,22 @@ def inspect_python_consumer(code: str, questions: Mapping[str, Any]) -> dict[str
     known_question_ids = {str(question_id) for question_id in questions}
     collector = _AnswerAccessCollector(known_question_ids)
     collector.visit(tree)
-    if collector.unresolved:
-        lines = sorted({node.lineno for node in collector.unresolved})
+    resolved = {
+        node: _AnswerRead((question_id,), node.attr, "sdk_root") for node, question_id in collector.resolved.items()
+    }
+    try:
+        _bind_declared_reads(tree, questions, answer_bindings, resolved)
+    except ValueError as error:
+        return {"status": "not_reviewed", "reason": f"workflow.answer_bindings {error}", "sites": []}
+    unresolved = [node for node in collector.unresolved if node not in resolved]
+    if unresolved:
+        lines = sorted({node.lineno for node in unresolved})
         return {
             "status": "not_reviewed",
             "reason": f"workflow.consumer_code has unresolved typed-answer reads at lines {lines}",
             "sites": [],
         }
-    all_accesses = _answer_accesses(tree, collector.resolved)
+    all_accesses = _answer_accesses(tree, resolved)
     if not all_accesses:
         return {
             "status": "not_reviewed",
@@ -350,13 +466,16 @@ def inspect_python_consumer(code: str, questions: Mapping[str, Any]) -> dict[str
     sites: list[dict[str, Any]] = []
     seen_compositions: set[tuple[int, int]] = set()
     for node in ast.walk(tree):
-        if not isinstance(node, ast.BinOp):
+        operation = _composition_operation(node, resolved)
+        if operation is None:
             continue
-        accesses = _answer_accesses(node, collector.resolved)
+        accesses = _answer_accesses(node, resolved)
         if not accesses:
             continue
-        parent_composition = _ancestor(node, parents, ast.BinOp)
-        if isinstance(parent_composition, ast.BinOp) and _answer_accesses(parent_composition, collector.resolved):
+        if any(
+            _composition_operation(parent, resolved) is not None and _answer_accesses(parent, resolved)
+            for parent in _parent_chain(node, parents)
+        ):
             continue
         identity = (node.lineno, node.col_offset)
         if identity in seen_compositions:
@@ -366,43 +485,60 @@ def inspect_python_consumer(code: str, questions: Mapping[str, Any]) -> dict[str
         branches = [ast.unparse(parent.test) for parent in _parent_chain(node, parents) if isinstance(parent, ast.If)]
         sites.append(
             {
+                "_node": node,
                 "kind": "composition",
                 "line": node.lineno,
                 "expression": ast.unparse(node),
                 "statement": ast.unparse(statement),
                 "downstream_uses": _downstream_uses(statement, tree, parents),
                 "branch_conditions": branches,
-                "operation": type(node.op).__name__,
-                "answer_fields": sorted({access.attr for access, _ in accesses}),
-                "question_ids": sorted({question_id for _, question_id in accesses}),
+                "operation": operation,
+                "answer_fields": sorted({read.field for _, read in accesses}),
+                "question_ids": sorted({question_id for _, read in accesses for question_id in read.question_ids}),
+                "binding_provenance": sorted({read.provenance for _, read in accesses}),
             }
         )
 
-    for access, question_id in all_accesses:
+    for access, read in all_accesses:
         statement = _ancestor(access, parents, ast.stmt) or access
         branches = [ast.unparse(parent.test) for parent in _parent_chain(access, parents) if isinstance(parent, ast.If)]
         sites.append(
             {
+                "_node": access,
                 "kind": "answer_read",
                 "line": access.lineno,
                 "expression": ast.unparse(access),
                 "statement": ast.unparse(statement),
                 "downstream_uses": _downstream_uses(statement, tree, parents),
                 "branch_conditions": branches,
-                "answer_fields": [access.attr],
-                "question_ids": [question_id],
+                "answer_fields": [read.field],
+                "question_ids": list(read.question_ids),
+                "binding_provenance": read.provenance,
             }
         )
 
+    contexts: list[dict[str, Any]] = []
     for index, site in enumerate(sites):
+        node = site.pop("_node")
+        if site["binding_provenance"] in ("sdk_root", ["sdk_root"]):
+            del site["binding_provenance"]
+        else:
+            context = _declared_context(node, code, tree, parents)
+            if context not in contexts:
+                contexts.append(context)
+            site["source_context_path"] = f"workflow_coverage.source_contexts[{contexts.index(context)}]"
         site["site_id"] = f"site_{index}"
         site["relevant_questions"] = {question_id: questions[question_id] for question_id in site.pop("question_ids")}
-    return {
+    analysis = {
         "status": "reviewed",
         "language": "python",
         "site_count": len(sites),
         "sites": sites,
     }
+    if contexts:
+        analysis["source_contexts"] = contexts
+        analysis["coverage_scope"] = "declared_reads_and_direct_sdk_reads"
+    return analysis
 
 
 def _parent_chain(node: ast.AST, parents: Mapping[ast.AST, ast.AST]) -> list[ast.AST]:
