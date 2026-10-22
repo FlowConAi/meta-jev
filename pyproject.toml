@@ -34,3 +34,7 @@ target-version = "py311"
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B", "SIM"]
+
+[tool.uv]
+exclude-newer = "7 days"
+exclude-newer-package = { certifi = false }
